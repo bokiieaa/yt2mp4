@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>YouTube CDN Converter</title>
+    <title>YouTube Downloader</title>
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -90,92 +90,104 @@
 
 <div class="container">
     <h1>YouTube CDN Downloader</h1>
-    <input type="text" id="videoUrl" placeholder="Paste YouTube Link..." />
+    <input type="text" id="videoUrl" placeholder="Paste YouTube Link or Video ID..." />
     <button id="convertBtn" onclick="convertVideo()">Extract Links</button>
     <div id="status"></div>
 </div>
 
 <script>
     const RAPIDAPI_KEY = "04a077fb2amsh01b68f93dfc0c8bp14771bjsnced32557f20f"; 
-    const RAPIDAPI_HOST = "youtube-mp4-mp3-m4a-cdn.p.rapidapi.com";
-    
-    // Fallback proxy array matrix to cycle if one engine hits limits
+    const RAPIDAPI_HOST = "://rapidapi.com";
     const PROXY_URL = "https://corsproxy.io?";
 
+    // Helper function to extract 11-character video ID or fallback to standard URL input
+    function parseInput(val) {
+        const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|\&v=)([^#\&\?]*).*/;
+        const match = val.match(regExp);
+        if (match && match[2].length === 11) {
+            return { type: 'id', value: match[2] };
+        }
+        if (val.length === 11 && !val.includes('/') && !val.includes('.')) {
+            return { type: 'id', value: val };
+        }
+        return { type: 'url', value: val };
+    }
+
     async function convertVideo() {
-        const urlInput = document.getElementById('videoUrl').value.trim();
+        const inputVal = document.getElementById('videoUrl').value.trim();
         const statusDiv = document.getElementById('status');
         const convertBtn = document.getElementById('convertBtn');
 
-        if (!urlInput) {
-            statusDiv.innerHTML = "<div class='error-box'>Please paste a YouTube URL.</div>";
+        if (!inputVal) {
+            statusDiv.innerHTML = "<div class='error-box'>Please paste a YouTube URL or Video ID.</div>";
             return;
         }
 
-        statusDiv.innerHTML = "<em>Extracting array nodes from media blocks...</em>";
+        const parsed = parseInput(inputVal);
+        statusDiv.innerHTML = "<em>Querying CDN node streams...</em>";
         convertBtn.disabled = true;
 
-        // Try GET request first
         try {
-            await makeRequest("GET", urlInput, statusDiv);
-        } catch (error) {
-            console.log("GET Request failed, attempting fallback payload configuration...");
-            // Automated fallback scheme switching HTTP Method to POST to clear strict headers
-            try {
-                await makeRequest("POST", urlInput, statusDiv);
-            } catch (postError) {
-                statusDiv.innerHTML = `
-                    <div class='error-box'>
-                        <strong>Error 403 (Subscription Block):</strong> The request failed.<br><br>
-                        <strong>The Fix:</strong> Go to the <a href="https://rapidapi.com/nguyenmanhict-MuTUtGWD7K/api/youtube-mp4-mp3-m4a-cdn" target="_blank" style="color:#d73a49; font-weight:bold;">RapidAPI CDN Dashboard</a>, log in, and hit <strong>"Subscribe to Test"</strong>. Your account key won't work until subscription authorization changes sync.
-                    </div>`;
+            // Build endpoint target URL using the correct id/url query assignment matching the manual
+            let targetUrl = `https://${RAPIDAPI_HOST}/stream?`;
+            if (parsed.type === 'id') {
+                targetUrl += `id=${encodeURIComponent(parsed.value)}`;
+            } else {
+                targetUrl += `url=${encodeURIComponent(parsed.value)}`;
             }
-        } finally {
-            convertBtn.disabled = false;
-        }
-    }
-
-    async function makeRequest(method, videoUrl, statusDiv) {
-        let targetUrl = `https://${RAPIDAPI_HOST}/ytbStream`;
-        let fetchOptions = {
-            method: method,
-            headers: {
-                'x-rapidapi-key': RAPIDAPI_KEY,
-                'x-rapidapi-host': RAPIDAPI_HOST
-            }
-        };
-
-        if (method === "GET") {
-            targetUrl += `?url=${encodeURIComponent(videoUrl)}`;
-        } else {
-            fetchOptions.headers['Content-Type'] = 'application/json';
-            fetchOptions.body = JSON.stringify({ url: videoUrl });
-        }
-
-        const response = await fetch(PROXY_URL + encodeURIComponent(targetUrl), fetchOptions);
-        
-        if (response.status === 403) throw new Error("403 Forbidden");
-        if (!response.ok) throw new Error(`Status ${response.status}`);
-
-        const data = await response.json();
-        
-        if (data && Array.isArray(data.formats)) {
-            let htmlOutput = `<p style="margin:5px 0;"><strong>Success!</strong> Links isolated:</p><div class="format-list">`;
-            data.formats.forEach(item => {
-                if (item.url) {
-                    const labelText = item.label || `${item.ext || 'MP4'} (${item.quality || 'Unknown'})`;
-                    const typeFlag = item.type === 'video_only' ? ' <span style="color:#d73a49; font-size:11px;">(Mute)</span>' : '';
-                    htmlOutput += `
-                        <div class="format-item">
-                            <span style="font-size: 13px; font-weight: 500;">${labelText}${typeFlag}</span>
-                            <a href="${item.url}" target="_blank" class="download-btn">Download</a>
-                        </div>`;
+            
+            const response = await fetch(PROXY_URL + encodeURIComponent(targetUrl), {
+                method: 'GET',
+                headers: {
+                    'x-rapidapi-key': RAPIDAPI_KEY,
+                    'x-rapidapi-host': RAPIDAPI_HOST
                 }
             });
-            htmlOutput += `</div>`;
-            statusDiv.innerHTML = htmlOutput;
-        } else {
-            throw new Error("Invalid structure returned");
+
+            if (response.status === 403) {
+                statusDiv.innerHTML = `
+                    <div class='error-box'>
+                        <strong>Error 403 (Unauthorized):</strong> Server rejected token verification.<br><br>
+                        Make sure you clicked <strong>"Subscribe to Test"</strong> on the <a href="https://rapidapi.com" target="_blank" style="color:#d73a49; font-weight:bold;">RapidAPI Portal Hub</a>.
+                    </div>`;
+                return;
+            }
+
+            if (!response.ok) throw new Error(`CDN backend responded with code: ${response.status}`);
+
+            const data = await response.json();
+            console.log("Verified API Response Data:", data);
+
+            // The manual defines the response structure as a direct flat array: [{ quality, url, extension, type }]
+            if (data && Array.isArray(data) && data.length > 0) {
+                let htmlOutput = `<p style="margin:5px 0;"><strong>Success!</strong> Links isolated:</p><div class="format-list">`;
+                
+                data.forEach(item => {
+                    if (item.url) {
+                        const fileExt = (item.extension || 'mp4').toUpperCase();
+                        const qualityLabel = item.quality || 'Default';
+                        const isMuted = item.type === 'video_only' ? ' <span style="color:#d73a49; font-size:11px;">(Mute)</span>' : '';
+                        
+                        htmlOutput += `
+                            <div class="format-item">
+                                <span style="font-size: 13px; font-weight: 500;">${fileExt} - ${qualityLabel}${isMuted}</span>
+                                <a href="${item.url}" target="_blank" class="download-btn">Download</a>
+                            </div>
+                        `;
+                    }
+                });
+
+                htmlOutput += `</div>`;
+                statusDiv.innerHTML = htmlOutput;
+            } else {
+                statusDiv.innerHTML = `<div class='error-box'><strong>Data Format Error:</strong> The server processed the request but returned an empty array or missing structure.</div>`;
+            }
+
+        } catch (error) {
+            console.error(error);
+            statusDiv.innerHTML = `<div class='error-box'><strong>Exception caught:</strong> ${error.message}</div>`;
+        } finally {
+            convertBtn.disabled = false;
         }
     }
 </script>
